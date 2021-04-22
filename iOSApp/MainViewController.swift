@@ -14,29 +14,29 @@ class MainViewController: UITableViewController, SimplePingDelegate {
     
     override func viewDidLoad() {
         super.viewDidLoad()
-        self.title = self.hostName
+        title = hostName
     }
 
     var pinger: SimplePing?
-    var sendTimer: NSTimer?
+    var sendTimer: Timer?
     
     /// Called by the table view selection delegate callback to start the ping.
     
-    func start(forceIPv4 forceIPv4: Bool, forceIPv6: Bool) {
-        self.pingerWillStart()
+    func start(forceIPv4: Bool, forceIPv6: Bool) {
+        pingerWillStart()
 
         NSLog("start")
 
-        let pinger = SimplePing(hostName: self.hostName)
+        let pinger = SimplePing(hostName: hostName)
         self.pinger = pinger
 
         // By default we use the first IP address we get back from host resolution (.Any) 
         // but these flags let the user override that.
             
         if (forceIPv4 && !forceIPv6) {
-            pinger.addressStyle = .ICMPv4
+            pinger.addressStyle = .icmPv4
         } else if (forceIPv6 && !forceIPv4) {
-            pinger.addressStyle = .ICMPv6
+            pinger.addressStyle = .icmPv6
         }
 
         pinger.delegate = self
@@ -47,13 +47,13 @@ class MainViewController: UITableViewController, SimplePingDelegate {
     
     func stop() {
         NSLog("stop")
-        self.pinger?.stop()
-        self.pinger = nil
+        pinger?.stop()
+        pinger = nil
 
-        self.sendTimer?.invalidate()
-        self.sendTimer = nil
+        sendTimer?.invalidate()
+        sendTimer = nil
         
-        self.pingerDidStop()
+        pingerDidStop()
     }
 
     /// Sends a ping.
@@ -61,45 +61,45 @@ class MainViewController: UITableViewController, SimplePingDelegate {
     /// Called to send a ping, both directly (as soon as the SimplePing object starts up) and 
     /// via a timer (to continue sending pings periodically).
     
-    func sendPing() {
-        self.pinger!.sendPingWithData(nil)
+    @objc func sendPing() {
+        pinger!.send(with: nil)
     }
 
     // MARK: pinger delegate callback
     
-    func simplePing(pinger: SimplePing, didStartWithAddress address: NSData) {
+    func simplePing(_ pinger: SimplePing, didStartWithAddress address: Data) {
         NSLog("pinging %@", MainViewController.displayAddressForAddress(address))
         
         // Send the first ping straight away.
         
-        self.sendPing()
+        sendPing()
 
         // And start a timer to send the subsequent pings.
         
-        assert(self.sendTimer == nil)
-        self.sendTimer = NSTimer.scheduledTimerWithTimeInterval(1.0, target: self, selector: #selector(MainViewController.sendPing), userInfo: nil, repeats: true)
+        assert(sendTimer == nil)
+        sendTimer = Timer.scheduledTimer(timeInterval: 1.0, target: self, selector: #selector(MainViewController.sendPing), userInfo: nil, repeats: true)
     }
     
-    func simplePing(pinger: SimplePing, didFailWithError error: NSError) {
+    func simplePing(_ pinger: SimplePing, didFailWithError error: Error) {
         NSLog("failed: %@", MainViewController.shortErrorFromError(error))
         
-        self.stop()
+        stop()
     }
     
-    func simplePing(pinger: SimplePing, didSendPacket packet: NSData, sequenceNumber: UInt16) {
+    func simplePing(_ pinger: SimplePing, didSendPacket packet: Data, sequenceNumber: UInt16) {
         NSLog("#%u sent", sequenceNumber)
     }
     
-    func simplePing(pinger: SimplePing, didFailToSendPacket packet: NSData, sequenceNumber: UInt16, error: NSError) {
+    func simplePing(_ pinger: SimplePing, didFailToSendPacket packet: Data, sequenceNumber: UInt16, error: Error) {
         NSLog("#%u send failed: %@", sequenceNumber, MainViewController.shortErrorFromError(error))
     }
     
-    func simplePing(pinger: SimplePing, didReceivePingResponsePacket packet: NSData, sequenceNumber: UInt16) {
-        NSLog("#%u received, size=%zu", sequenceNumber, packet.length)
+    func simplePing(_ pinger: SimplePing, didReceivePingResponsePacket packet: Data, sequenceNumber: UInt16) {
+        NSLog("#%u received, size=%zu", sequenceNumber, packet.count)
     }
     
-    func simplePing(pinger: SimplePing, didReceiveUnexpectedPacket packet: NSData) {
-        NSLog("unexpected packet, size=%zu", packet.length)
+    func simplePing(_ pinger: SimplePing, didReceiveUnexpectedPacket packet: Data) {
+        NSLog("unexpected packet, size=%zu", packet.count)
     }
     
     // MARK: utilities
@@ -110,12 +110,14 @@ class MainViewController: UITableViewController, SimplePingDelegate {
     ///
     /// - returns: A string representation of that address.
 
-    static func displayAddressForAddress(address: NSData) -> String {
-        var hostStr = [Int8](count: Int(NI_MAXHOST), repeatedValue: 0)
+    static func displayAddressForAddress(_ address: Data) -> String {
+        var hostStr = [Int8](repeating: 0, count: Int(NI_MAXHOST));
         
         let success = getnameinfo(
-            UnsafePointer(address.bytes), 
-            socklen_t(address.length), 
+            address.withUnsafeBytes { (ptr) -> UnsafePointer<sockaddr> in
+                ptr.baseAddress!.assumingMemoryBound(to: sockaddr.self)
+            },
+            socklen_t(address.count),
             &hostStr, 
             socklen_t(hostStr.count), 
             nil, 
@@ -124,7 +126,7 @@ class MainViewController: UITableViewController, SimplePingDelegate {
         ) == 0
         let result: String
         if success {
-            result = String.fromCString(hostStr)!
+            result = String(cString: hostStr)
         } else {
             result = "?"
         }
@@ -137,14 +139,16 @@ class MainViewController: UITableViewController, SimplePingDelegate {
     ///
     /// - returns: A short string representing that error.
 
-    static func shortErrorFromError(error: NSError) -> String {
-        if error.domain == kCFErrorDomainCFNetwork as String && error.code == Int(CFNetworkErrors.CFHostErrorUnknown.rawValue) {
-            if let failureObj = error.userInfo[kCFGetAddrInfoFailureKey] {
+    static func shortErrorFromError(_ error: Error) -> String {
+        let error = error as NSError
+
+        if error.domain == kCFErrorDomainCFNetwork as String, error.code == Int(CFNetworkErrors.cfHostErrorUnknown.rawValue) {
+            if let failureObj = error.userInfo[kCFGetAddrInfoFailureKey as String] {
                 if let failureNum = failureObj as? NSNumber {
                     if failureNum.intValue != 0 {
-                        let f = gai_strerror(failureNum.intValue)
+                        let f = gai_strerror(failureNum.int32Value)
                         if f != nil {
-                            return String.fromCString(f)!
+                            return String(cString: f!, encoding: .utf8)!
                         }
                     }
                 }
@@ -162,30 +166,30 @@ class MainViewController: UITableViewController, SimplePingDelegate {
     @IBOutlet var forceIPv6Cell: UITableViewCell!
     @IBOutlet var startStopCell: UITableViewCell!
 
-    override func tableView(tableView: UITableView, didSelectRowAtIndexPath indexPath: NSIndexPath) {
-        let cell = self.tableView.cellForRowAtIndexPath(indexPath)!
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath : IndexPath) {
+        let cell = tableView.cellForRow(at: indexPath)!
         switch cell {
         case forceIPv4Cell, forceIPv6Cell:
-            cell.accessoryType = cell.accessoryType == .None ? .Checkmark : .None
+            cell.accessoryType = cell.accessoryType == .none ? .checkmark : .none
         case startStopCell:
-            if self.pinger == nil {
-                let forceIPv4 = self.forceIPv4Cell.accessoryType != .None
-                let forceIPv6 = self.forceIPv6Cell.accessoryType != .None
-                self.start(forceIPv4: forceIPv4, forceIPv6: forceIPv6)
+            if pinger == nil {
+                let forceIPv4 = forceIPv4Cell.accessoryType != .none
+                let forceIPv6 = forceIPv6Cell.accessoryType != .none
+                start(forceIPv4: forceIPv4, forceIPv6: forceIPv6)
             } else {
-                self.stop()
+                stop()
             }
         default:
             fatalError()
         }
-        self.tableView.deselectRowAtIndexPath(indexPath, animated: true)
+        tableView.deselectRow(at: indexPath, animated: true)
     }
 
     func pingerWillStart() {
-        self.startStopCell.textLabel!.text = "Stop…"
+        startStopCell.textLabel!.text = "Stop…"
     }
     
     func pingerDidStop() {
-        self.startStopCell.textLabel!.text = "Start…"
+        startStopCell.textLabel!.text = "Start…"
     }
 }
